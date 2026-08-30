@@ -157,6 +157,7 @@ function expandOpenSpecTasks(changes) {
         verify: t.verify,
         status: t.status,
         files: t.files,
+        generate: t.generate,
         group: t.group,
         changeName: change.name,
         taskNum: t.id,
@@ -393,6 +394,7 @@ function renderDetail(d) {
         : `<div class="empty">Aucune dépendance — rattachée directement au change.</div>`}
       <h3>Vérification</h3>
       <div class="part">${esc(d.verify || "non précisée")}</div>
+      ${d.generate ? `<h3>Commande de génération</h3><div class="part">${esc(d.generate)}</div>` : ""}
       <h3>Fichiers produits (${(d.files || []).length})</h3>
       ${filesHtml}`;
     return;

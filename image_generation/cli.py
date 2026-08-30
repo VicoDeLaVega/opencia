@@ -10,6 +10,14 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
+
+# Make `from image_generation import ...` work no matter how this file is
+# invoked (`python image_generation/cli.py`, `python cli.py` from inside the
+# directory, etc.) - not just via `python -m image_generation.cli` from the
+# repo root. Tasks' `generate:` commands (see the task-graph schema) call
+# this file by relative path directly, so this has to be self-sufficient.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from image_generation import api
 
@@ -25,6 +33,8 @@ def main() -> int:
     parser.add_argument("--palette-size", type=int, default=None, dest="palette_size")
     parser.add_argument("--server-url", default="http://127.0.0.1:8188")
     parser.add_argument("--planner-model", default="qwen3:32b")
+    parser.add_argument("--task-file", default=None, help="tasks.md to update with the output path (see taskfile.py)")
+    parser.add_argument("--task-id", default=None, help="task number (e.g. 1.1) within --task-file to update")
     args = parser.parse_args()
 
     kwargs = {}
@@ -56,6 +66,24 @@ def main() -> int:
 
     print(f"mode={result.request.mode} seed={result.seed_used} duration={result.duration_seconds:.1f}s")
     print(result.output_path)
+
+    if args.task_file and args.task_id:
+        from pathlib import Path
+
+        from image_generation.taskfile import update_task_line
+
+        # `files:` entries are project-root-relative (see
+        # openspec/schemas/task-graph/schema.yaml) - image_generation's own
+        # output_path is absolute, so convert before writing it in.
+        project_root = Path(__file__).resolve().parent.parent
+        rel_path = Path(result.output_path).resolve().relative_to(project_root)
+
+        found = update_task_line(args.task_file, args.task_id, str(rel_path), new_status="in_review")
+        if found:
+            print(f"updated task {args.task_id} in {args.task_file}: files += {rel_path}, status -> in_review")
+        else:
+            print(f"WARNING: task {args.task_id} not found in {args.task_file} - files field not updated", file=sys.stderr)
+
     return 0
 
 

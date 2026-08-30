@@ -189,9 +189,9 @@ artifacts:
       in this order, separated by ` | `. Tasks not using `- [ ]` won't be
       tracked by either.
 
-      **Task line format (all six fields required, in this order):**
+      **Task line format (all seven fields required, in this order):**
       ```
-      - [ ] X.Y Task description | depends: <refs> | difficulty: <level> | verify: <check> | status: <state> | files: <paths>
+      - [ ] X.Y Task description | depends: <refs> | difficulty: <level> | verify: <check> | status: <state> | files: <paths> | generate: <command>
       ```
       - `depends`: comma-separated task numbers this task needs finished first
         (e.g. `1.1,1.2`), or `none` if it has no prerequisite within this task
@@ -207,6 +207,19 @@ artifacts:
         below). Never write anything else here yourself.
       - `files`: always `none` at creation time - same reasoning, the apply
         phase fills this in as files are actually produced.
+      - `generate`: `none` for ordinary code/config/test/doc tasks. For a
+        task whose entire deliverable is a generated game-art asset (a
+        sprite, icon, tile, or background - not code that uses one), the
+        exact command to produce it:
+        `image_generation/venv/bin/python image_generation/cli.py "<prompt>" --mode pixel_art --task-file <this file's path> --task-id <this task's id>`
+        (add `--mode image` instead of `pixel_art` for a non-pixel-art
+        image). Write a real, specific prompt - not a placeholder. The
+        `--task-file`/`--task-id` flags matter: the command updates this
+        exact task's `files` and `status` fields itself when it finishes, so
+        the executing agent does not need to hand-edit that metadata. The
+        whole task line is split on ` | `, so the command (and the prompt
+        inside it) must not itself contain a `|` character - rephrase the
+        prompt instead of using a literal pipe.
 
       Guidelines:
       - Group related tasks under ## numbered headings
@@ -222,13 +235,17 @@ artifacts:
       ```
       ## 1. Setup
 
-      - [ ] 1.1 Create new module structure | depends: none | difficulty: easy | verify: expected files are present | status: not_started | files: none
-      - [ ] 1.2 Add dependencies to package.json | depends: 1.1 | difficulty: easy | verify: package installation succeeds | status: not_started | files: none
+      - [ ] 1.1 Create new module structure | depends: none | difficulty: easy | verify: expected files are present | status: not_started | files: none | generate: none
+      - [ ] 1.2 Add dependencies to package.json | depends: 1.1 | difficulty: easy | verify: package installation succeeds | status: not_started | files: none | generate: none
 
       ## 2. Core Implementation
 
-      - [ ] 2.1 Implement data export function | depends: 1.2 | difficulty: medium | verify: export test passes | status: not_started | files: none
-      - [ ] 2.2 Add CSV formatting utilities | depends: 2.1 | difficulty: easy | verify: unit tests cover quoting and delimiters | status: not_started | files: none
+      - [ ] 2.1 Implement data export function | depends: 1.2 | difficulty: medium | verify: export test passes | status: not_started | files: none | generate: none
+      - [ ] 2.2 Add CSV formatting utilities | depends: 2.1 | difficulty: easy | verify: unit tests cover quoting and delimiters | status: not_started | files: none | generate: none
+
+      ## 3. Art (only when the change actually needs generated game art)
+
+      - [ ] 3.1 Generate player sprite icon | depends: none | difficulty: easy | verify: PNG exists, reads as a readable pixel-art character | status: not_started | files: none | generate: image_generation/venv/bin/python image_generation/cli.py "16-bit JRPG hero, pixel art, white background" --mode pixel_art --transparent --task-file openspec/changes/<this-change>/tasks.md --task-id 3.1
       ```
 
       Reference specs for what needs to be built, design for how to build it.
@@ -247,13 +264,20 @@ apply:
 
     1. Before starting a task, edit its line in place: `status: not_started`
        → `status: in_progress`.
-    2. As you create or modify a file for that task, add its path to the
-       task's `files` field (comma-separated, relative to the project root,
-       e.g. `files: src/api.ts,src/api.test.ts`). Append to the existing list
-       rather than overwriting it if the task already has files recorded.
-    3. Once the implementation looks done but you have not yet run its
-       `verify` check, set `status: in_review`.
-    4. Run the `verify` check. If it passes, flip the checkbox to `[x]` and
+    2. If the task's `generate` field is not `none`, run that exact command
+       (it already targets this tasks.md and this task's id) instead of
+       writing code for it - it updates the task's own `files` and `status`
+       fields itself when it finishes. Do not also hand-edit those two
+       fields for this task; just verify the command succeeded.
+    3. Otherwise, as you create or modify a file for the task, add its path
+       to the task's `files` field (comma-separated, relative to the
+       project root, e.g. `files: src/api.ts,src/api.test.ts`). Append to
+       the existing list rather than overwriting it if the task already has
+       files recorded.
+    4. Once the implementation looks done but you have not yet run its
+       `verify` check, set `status: in_review` (the `generate` command
+       already does this for its own task).
+    5. Run the `verify` check. If it passes, flip the checkbox to `[x]` and
        set `status: done`. If it fails, keep working on the task - do not
        mark it done or move to a dependent task.
 

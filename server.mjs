@@ -126,6 +126,7 @@ function parseTasksMd(content) {
       // `status` — fall back to the checkbox so they still render sanely.
       status: meta.status || (checked ? "done" : "not_started"),
       files,
+      generate: meta.generate && meta.generate.toLowerCase() !== "none" ? meta.generate : null,
     });
   }
   return tasks;
