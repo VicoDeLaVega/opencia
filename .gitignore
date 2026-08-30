@@ -1,2 +1,6 @@
 node_modules/
 *.log
+image_generation/venv/
+image_generation/outputs/
+__pycache__/
+*.pyc

@@ -1,0 +1,45 @@
+# Model configuration per generation mode.
+#
+# Verified live on 2026-08-30 (M3 Max, 64GB unified memory, MPS backend):
+# - fp8/fp4 quantized weights FAIL on MPS ("RuntimeError: Undefined type
+#   Float8_e4m3fn" — PyTorch's fp8 dequant kernels are CUDA-only). Use the
+#   full bf16 weights instead; they fit comfortably in 64GB and generation
+#   is still fast (~7-9s per 512x512 image at 4 steps once the model is
+#   loaded in memory).
+# - Files must be placed in ComfyUI's models/ tree:
+#     diffusion_models/flux-2-klein-4b.safetensors
+#     text_encoders/qwen_3_4b.safetensors
+#     vae/flux2-vae.safetensors
+#     loras/pixelart_flux2klein_PXART4.safetensors
+
+general:
+  unet: flux-2-klein-4b.safetensors
+  clip: qwen_3_4b.safetensors
+  vae: flux2-vae.safetensors
+  clip_type: flux2
+  steps: 4
+  cfg: 1
+  width: 1024
+  height: 1024
+
+pixel_art:
+  unet: flux-2-klein-4b.safetensors
+  clip: qwen_3_4b.safetensors
+  vae: flux2-vae.safetensors
+  clip_type: flux2
+  steps: 4
+  cfg: 1
+  width: 512
+  height: 512
+  lora: pixelart_flux2klein_PXART4.safetensors
+  lora_strength: 1.0
+  # The LoRA was trained with this trigger word (see its model card).
+  trigger: "PXART4."
+  # LoRA trained on 64x64 source images upsampled to 512x512 - downscaling
+  # generated 512x512 output to 64x64 (nearest multiple) recovers genuine
+  # pixel density instead of a blurry "pixel-art style" image.
+  native_size: 64
+
+# sprite / tileset: not implemented yet (see README.md "Status"). Listed
+# here so the schema/planner can name them without the backend pretending
+# to support animation/tiling it doesn't have.
