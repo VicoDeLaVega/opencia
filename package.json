@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@opencode-ai/sdk": "^1.18.0",
+    "chokidar": "^5.0.0",
     "ws": "^8.18.0"
   }
 }

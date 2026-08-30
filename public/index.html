@@ -18,6 +18,7 @@
   }
   svg { width: 100vw; height: 100vh; display: block; }
   .link { stroke: #ddd7ca; stroke-width: 1.5px; fill: none; }
+  .link.openspec { stroke: #c9b8f0; stroke-width: 1.8px; stroke-dasharray: 4 3; }
   .node rect.core { stroke: #faf7f2; stroke-width: 2px; cursor: pointer; }
   .node text { fill: #5c5a68; font-size: 11px; pointer-events: none; }
   .node .sub { fill: #9a95a3; font-size: 9px; }
@@ -82,6 +83,15 @@ const TODO_COLOR = {
   cancelled: "#e3b8b8",   // pastel dusty red
 };
 
+// Colors for OpenSpec change-graph nodes: a change root, and its tasks
+// (real dependency edges this time — see openspec/schemas/task-graph).
+const OPENSPEC_COLOR = {
+  change: "#c9b8f0",      // pastel lavender — distinct from OpenCode sessions
+  taskPending: "#cfcbc2", // pastel grey, matches TODO_COLOR.pending
+  taskDone: "#8fd9b6",    // pastel green
+};
+const DIFFICULTY_LEVEL = { easy: 1, medium: 2, hard: 3 };
+
 // "radial": every todo hangs directly off its session (what the data actually
 //   is — a flat checklist, no dependency info).
 // "chain": todos linked todo[0] → todo[1] → todo[2] in list order instead.
@@ -112,10 +122,48 @@ function expandTodos(nodesData) {
   return nodesData.concat(extra);
 }
 
+// Turn each OpenSpec change's parsed tasks.md into a change-root node plus
+// one node per task. Unlike todos, tasks can have MULTIPLE real
+// dependencies (`dependsOn`), not just a single `parentID` — a task with no
+// dependency anchors to the change root instead, so nothing floats free.
+function expandOpenSpecTasks(changes) {
+  const extra = [];
+  for (const change of changes || []) {
+    const rootId = `openspec:${change.name}`;
+    extra.push({
+      id: rootId,
+      parentID: null,
+      title: change.name,
+      isOpenSpecChange: true,
+      status: "idle",
+    });
+    for (const t of change.tasks || []) {
+      const taskId = `openspec:${change.name}:${t.id}`;
+      const deps = (t.depends || []).map((d) => `openspec:${change.name}:${d}`);
+      extra.push({
+        id: taskId,
+        parentID: deps.length === 0 ? rootId : null,
+        dependsOn: deps.length ? deps : undefined,
+        title: `${t.id} ${t.description}`,
+        isOpenSpecTask: true,
+        checked: t.checked,
+        difficulty: t.difficulty,
+        verify: t.verify,
+        group: t.group,
+        changeName: change.name,
+        taskNum: t.id,
+      });
+    }
+  }
+  return extra;
+}
+
 // Node "card" dimensions by kind — used for the rect itself, the collide
 // force radius, and the spark offsets.
 function nodeSize(d) {
   if (d.isTodo) return { w: 96, h: 22 };
+  if (d.isOpenSpecTask) return { w: 150, h: 34 };
+  if (d.isOpenSpecChange) return { w: 160, h: 40 };
   if (d.parentID) return { w: 118, h: 32 }; // subagent session
   return { w: 138, h: 40 }; // primary session
 }
@@ -165,11 +213,17 @@ let linkSel = g.append("g").selectAll("path");
 let nodeSel = g.append("g").selectAll("g");
 
 function render(rawNodesData) {
-  const nodesData = expandTodos(rawNodesData);
+  const nodesData = expandTodos(rawNodesData).concat(expandOpenSpecTasks(lastOpenSpecChanges));
   const nodeMap = new Map(nodesData.map(d => [d.id, d]));
-  const links = nodesData
-    .filter(d => d.parentID && nodeMap.has(d.parentID))
-    .map(d => ({ source: d.parentID, target: d.id, isTodo: d.isTodo }));
+  // Most nodes have a single parentID link; OpenSpec tasks can additionally
+  // (or instead) have several real dependsOn edges — a genuine DAG, not a tree.
+  const links = [];
+  for (const d of nodesData) {
+    if (d.parentID && nodeMap.has(d.parentID)) links.push({ source: d.parentID, target: d.id, isTodo: d.isTodo });
+    for (const dep of d.dependsOn || []) {
+      if (nodeMap.has(dep)) links.push({ source: dep, target: d.id, isOpenSpecEdge: true });
+    }
+  }
 
   // preserve position of existing nodes across updates
   const prevPositions = new Map(simulation.nodes().map(d => [d.id, d]));
@@ -182,6 +236,7 @@ function render(rawNodesData) {
   linkSel = linkSel.data(links, d => `${d.source.id ?? d.source}-${d.target.id ?? d.target}`);
   linkSel.exit().remove();
   linkSel = linkSel.enter().append("path").attr("class", "link").merge(linkSel);
+  linkSel.classed("openspec", d => d.isOpenSpecEdge);
 
   nodeSel = nodeSel.data(mergedNodes, d => d.id);
   nodeSel.exit().remove();
@@ -219,8 +274,15 @@ function render(rawNodesData) {
   nodeSel.classed("running", d => d.status === "running" || d.status === "in_progress");
   nodeSel.classed("todo", d => d.isTodo);
 
+  function fillFor(d) {
+    if (d.isTodo) return TODO_COLOR[d.status] || "#5b6472";
+    if (d.isOpenSpecChange) return OPENSPEC_COLOR.change;
+    if (d.isOpenSpecTask) return d.checked ? OPENSPEC_COLOR.taskDone : OPENSPEC_COLOR.taskPending;
+    return STATUS_COLOR[d.status] || "#5b8cff";
+  }
+
   nodeSel.select("rect.core")
-    .attr("fill", d => d.isTodo ? (TODO_COLOR[d.status] || "#5b6472") : (STATUS_COLOR[d.status] || "#5b8cff"))
+    .attr("fill", fillFor)
     .attr("width", d => nodeSize(d).w)
     .attr("height", d => nodeSize(d).h)
     .attr("x", d => -nodeSize(d).w / 2)
@@ -229,9 +291,18 @@ function render(rawNodesData) {
 
   nodeSel.select("text.label")
     .attr("dy", d => d.isTodo ? 4 : -2)
-    .text(d => d.isTodo ? "" : (d.title || d.id).slice(0, 16));
+    .text(d => {
+      if (d.isTodo) return "";
+      if (d.isOpenSpecChange) return `📋 ${d.title}`.slice(0, 20);
+      return (d.title || d.id).slice(0, d.isOpenSpecTask ? 20 : 16);
+    });
   nodeSel.select("text.sub")
-    .text(d => d.isTodo ? d.title.slice(0, 20) : (d.lastEvent || ""))
+    .text(d => {
+      if (d.isTodo) return d.title.slice(0, 20);
+      if (d.isOpenSpecChange) return "openspec";
+      if (d.isOpenSpecTask) return `${d.difficulty || "?"} · ${d.checked ? "fait" : "à faire"}`;
+      return d.lastEvent || "";
+    })
     .attr("dy", d => d.isTodo ? 4 : 14)
     .style("text-decoration", d => d.isTodo && d.status === "cancelled" ? "line-through" : null)
     .style("opacity", d => d.isTodo && d.status === "completed" ? 0.5 : 1);
@@ -253,7 +324,9 @@ const detailBodyEl = document.getElementById("detailBody");
 function openDetail(id) {
   selectedId = id;
   detailEl.classList.add("open");
-  const nodeMap = new Map(expandTodos(lastRawNodes).map(d => [d.id, d]));
+  const nodeMap = new Map(
+    expandTodos(lastRawNodes).concat(expandOpenSpecTasks(lastOpenSpecChanges)).map(d => [d.id, d])
+  );
   if (nodeMap.has(id)) renderDetail(nodeMap.get(id));
 }
 
@@ -279,6 +352,32 @@ function renderDetail(d) {
       <h2>${esc(d.title)}</h2>
       <div class="meta"><div>Statut : ${STATUS_LABEL[d.status] || d.status}</div></div>
       <div class="empty">Todo issue de la todo-list native de l'agent (todowrite) — pas de détail supplémentaire disponible pour un item isolé.</div>`;
+    return;
+  }
+
+  if (d.isOpenSpecTask) {
+    detailBodyEl.innerHTML = `
+      <h2>${esc(d.title)}</h2>
+      <div class="meta">
+        <div>change : ${esc(d.changeName)}</div>
+        <div>groupe : ${esc(d.group || "—")}</div>
+        <div>statut : ${d.checked ? "✅ fait" : "⬜ à faire"}</div>
+        <div>difficulté : ${esc(d.difficulty || "?")}</div>
+      </div>
+      <h3>Dépend de</h3>
+      ${(d.dependsOn || []).length
+        ? d.dependsOn.map(dep => `<div class="part">${esc(dep.split(":").pop())}</div>`).join("")
+        : `<div class="empty">Aucune dépendance — rattachée directement au change.</div>`}
+      <h3>Vérification</h3>
+      <div class="part">${esc(d.verify || "non précisée")}</div>`;
+    return;
+  }
+
+  if (d.isOpenSpecChange) {
+    detailBodyEl.innerHTML = `
+      <h2>📋 ${esc(d.title)}</h2>
+      <div class="meta"><div>Change OpenSpec — voir <code>openspec/changes/${esc(d.title)}/</code></div></div>
+      <div class="empty">Clique une tâche satellite pour voir son détail (dépendances, difficulté, vérification).</div>`;
     return;
   }
 
@@ -335,6 +434,7 @@ document.getElementById("filesToggle").addEventListener("click", (ev) => {
 });
 
 let lastRawNodes = [];
+let lastOpenSpecChanges = [];
 
 document.getElementById("vizToggle").addEventListener("click", () => {
   vizMode = vizMode === "radial" ? "chain" : "radial";
@@ -351,6 +451,7 @@ function connect() {
     const msg = JSON.parse(ev.data);
     if (msg.type === "graph") {
       lastRawNodes = msg.data.nodes;
+      lastOpenSpecChanges = msg.data.openspecChanges || [];
       lastFilesEdited = msg.data.filesEdited || [];
       document.getElementById("filesToggle").textContent = `📁 fichiers (${lastFilesEdited.length})`;
       render(lastRawNodes);

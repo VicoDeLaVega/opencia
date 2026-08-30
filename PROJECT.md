@@ -351,7 +351,7 @@ Mapping contre ce qui existe (voir sections ci-dessus) :
 | Mockups PNG + acceptation visuelle | ⚠️ génération testée en vrai le 2026-08-30 (voir plus bas — **ça marche**) ; le flow accept/reject côté web reste à construire |
 | Questions techniques/archi | ✅ `opsx-propose` probablement (proposal.md/design.md) — pas encore testé en direct |
 | Génération de la liste de tâches | ✅ `tasks.md` d'OpenSpec |
-| Dépendances entre tâches, difficulté, méthode de test | ❌ le format `tasks.md` standard n'a que des cases à cocher numérotées hiérarchiquement (1.1, 1.2...) — aucune notion de "bloque"/"dépend de", pas de champ difficulté ni méthode de test. Nécessiterait une convention custom (ex: métadonnées par tâche) + un parseur adapté |
+| Dépendances entre tâches, difficulté, méthode de test | ✅ **fait le 2026-08-30** — schema `task-graph` personnalisé + watcher + parseur + rendu, voir plus bas |
 | Clic sur une tâche → détail | ✅ panneau de détail existant, adaptable |
 | Statut vert/rouge lié aux vrais tests (pas juste coché/pas coché) | ❌ rien de natif — nécessiterait de définir comment une tâche rapporte pass/fail de ses tests (fichier, exit code, event custom à inventer) |
 
@@ -420,6 +420,52 @@ serve, le visualiseur) — à relancer manuellement.
 
 Reste à faire pour ce chantier : le flow d'acceptation côté web (afficher le
 mockup généré, bouton accepter/rejeter, mémoriser les idées validées).
+
+### ✅ Chantier 1 (task-graph) — implémenté et testé de bout en bout, 2026-08-30
+
+Le plan ci-dessous a été exécuté intégralement et fonctionne :
+
+1. **`schema.yaml`** (`openspec/schemas/task-graph/`) : l'instruction de
+   l'artefact `tasks` réécrite pour imposer un format par tâche à 4 champs,
+   dans cet ordre, séparés par ` | ` :
+   ```
+   - [ ] X.Y Description | depends: <refs ou "none"> | difficulty: easy|medium|hard | verify: <check>
+   ```
+   `templates/tasks.md` mis à jour en exemple assorti. `openspec/config.yaml`
+   pointe sur `schema: task-graph`.
+2. **`server.mjs`** : watcher `chokidar` sur `openspec/changes/` (⚠️ chokidar
+   5+ a abandonné le support des patterns glob en string — un pattern
+   `changes/*/tasks.md` ne matchait silencieusement rien ; il faut watcher le
+   dossier et filtrer soi-même sur `path.basename(file) === "tasks.md"`,
+   vérifié en direct). Parseur regex qui extrait `id`, `checked`,
+   `description`, `depends[]`, `difficulty`, `verify`, groupé par les
+   sections `## N. Heading`. État exposé via `openspecChanges` dans le
+   snapshot du graphe, à côté de `nodes`/`filesEdited`.
+3. **`public/index.html`** : `expandOpenSpecTasks()` transforme chaque
+   change en un nœud racine (mauve, `#c9b8f0`) + un nœud par tâche. Contrairement
+   aux todos (un seul `parentID`), une tâche OpenSpec peut avoir plusieurs
+   vraies dépendances (`dependsOn[]`) — la construction des liens dans
+   `render()` a été généralisée pour émettre une arête par entrée de
+   `dependsOn` en plus du `parentID` existant. Arêtes de dépendance stylées
+   en pointillés mauves (`.link.openspec`) pour les distinguer visuellement
+   des liens parent→enfant classiques. Panneau de détail étendu (dépendances,
+   difficulté, verify).
+
+**Testé en conditions réelles** : régénéré `tasks.md` pour un nouveau change
+(`keep-finished-sessions-in-graph`) via `opsx-propose` +
+`opencode/nemotron-3-ultra-free` → vraies dépendances multi-parents produites
+(`depends: 1.2, 2.2`) → apparues correctement dans le graphe avec les bonnes
+arêtes croisées. Piège opérationnel additionnel trouvé : le process
+`opencode serve` et celui du visualiseur doivent tourner **depuis le même
+dossier** (`OPENSPEC_ROOT` par défaut est relatif à `server.mjs`) — on avait
+un mismatch `/mnt/c/dev2026/opencia` (opencode serve) vs `~/dev/opencia`
+(visualiseur), corrigé en faisant tourner les deux depuis `/mnt/c/...`.
+
+Non fait : le changement généré *avant* cette personnalisation
+(`add-dark-mode-to-visualizer`) n'a pas les nouveaux champs — normal, pas un
+bug, juste une donnée plus ancienne que le format. Reste aussi : chantier 2
+(statut vert/rouge lié aux vrais tests, toujours pas commencé) et
+régénérer/migrer les anciens changes si besoin.
 
 ### Comment on implémenterait le chantier 1 concrètement : ni fork ni from-scratch
 

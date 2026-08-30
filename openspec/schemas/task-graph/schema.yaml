@@ -171,7 +171,7 @@ artifacts:
 
   - id: tasks
     generates: tasks.md
-    description: Implementation checklist with trackable tasks
+    description: Implementation checklist with trackable tasks, dependencies, difficulty, and verification
     template: tasks.md
     instruction: |
       Create the task list that breaks down the implementation work.
@@ -180,31 +180,50 @@ artifacts:
       would change what gets built, resolve them with the user first - do not
       bake an unstated assumption into the task list.
 
-      **IMPORTANT: Follow the template below exactly.** The apply phase parses
-      checkbox format to track progress. Tasks not using `- [ ]` won't be tracked.
+      **IMPORTANT: Follow the template below exactly, including the metadata
+      suffix on every task line.** The apply phase only parses the leading
+      `- [ ]`/`- [x]` to track progress, so the metadata after the
+      description does not interfere with it - but a companion visualizer
+      parses that metadata separately to render a real dependency graph, so
+      it MUST be present and MUST follow the exact `key: value` format below,
+      in this order, separated by ` | `. Tasks not using `- [ ]` won't be
+      tracked by either.
+
+      **Task line format (all four fields required, in this order):**
+      ```
+      - [ ] X.Y Task description | depends: <refs> | difficulty: <level> | verify: <check>
+      ```
+      - `depends`: comma-separated task numbers this task needs finished first
+        (e.g. `1.1,1.2`), or `none` if it has no prerequisite within this task
+        list. Reference only tasks defined earlier in this same file.
+      - `difficulty`: exactly one of `easy`, `medium`, `hard` - your honest
+        estimate of implementation effort/risk for that specific task, not
+        the change as a whole.
+      - `verify`: how to confirm the task is actually done - a concrete test
+        command, an explicit manual check, or an observable behavior. Not a
+        restatement of the task description.
 
       Guidelines:
       - Group related tasks under ## numbered headings
-      - Each task MUST be a checkbox: `- [ ] X.Y Task description`
+      - Each task MUST be a checkbox with the full metadata suffix above
       - Tasks should be small enough to complete in one session
-      - Order tasks by dependency (what must be done first?)
-      - Each task MUST state how to verify completion (a test, command,
-        observable behavior, or delivered artifact). Put the verification in
-        that task's checkbox description. Use a separate verification task only
-        when it checks broader integration or system behavior that spans
-        multiple implementation tasks.
+      - Order tasks by dependency (what must be done first?) - `depends`
+        should agree with the ordering, but state it explicitly regardless;
+        don't make the reader infer it from position alone
+      - A task with no real prerequisite still needs `depends: none` written
+        out - never omit the field
 
       Example:
       ```
       ## 1. Setup
 
-      - [ ] 1.1 Create new module structure and verify expected files are present
-      - [ ] 1.2 Add dependencies to package.json and verify package installation succeeds
+      - [ ] 1.1 Create new module structure | depends: none | difficulty: easy | verify: expected files are present
+      - [ ] 1.2 Add dependencies to package.json | depends: 1.1 | difficulty: easy | verify: package installation succeeds
 
       ## 2. Core Implementation
 
-      - [ ] 2.1 Implement data export function and verify the export test passes
-      - [ ] 2.2 Add CSV formatting utilities and verify unit tests cover quoting and delimiters
+      - [ ] 2.1 Implement data export function | depends: 1.2 | difficulty: medium | verify: export test passes
+      - [ ] 2.2 Add CSV formatting utilities | depends: 2.1 | difficulty: easy | verify: unit tests cover quoting and delimiters
       ```
 
       Reference specs for what needs to be built, design for how to build it.

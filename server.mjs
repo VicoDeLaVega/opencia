@@ -15,11 +15,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { createOpencodeClient } from "@opencode-ai/sdk";
+import chokidar from "chokidar";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const OPENCODE_URL = process.env.OPENCODE_URL || "http://localhost:4096";
 const VIS_PORT = Number(process.env.VIS_PORT || 8787);
+// Where to look for an `openspec/` directory (OpenSpec's own convention).
+// Defaults to sitting next to this server, which is our own setup — a
+// separate opencode project being watched would need to point this at
+// itself instead.
+const OPENSPEC_ROOT = process.env.OPENSPEC_ROOT || path.join(__dirname, "openspec");
 
 // ---- graph state -----------------------------------------------------
 // nodes: sessionId -> { id, parentID, title, agent, status, lastEvent, updatedAt }
@@ -57,7 +63,90 @@ function snapshotGraph() {
   return {
     nodes: [...nodes.values()],
     filesEdited: [...globalFilesEdited],
+    openspecChanges: [...openspecChanges.values()],
   };
+}
+
+// ---- OpenSpec task-graph ingestion ---------------------------------------
+// Pure file-based, no API from OpenSpec's side — we watch
+// openspec/changes/*/tasks.md ourselves and parse our own extended task
+// line format (see openspec/schemas/task-graph/schema.yaml):
+//   - [ ] 1.1 Description | depends: 1.2,2.1 | difficulty: medium | verify: ...
+// `openspec status`/`apply` only look at the leading "- [ ]"/"- [x]", so
+// this stays fully compatible with them — we're not modifying OpenSpec,
+// just reading the same file with a richer parser.
+const openspecChanges = new Map(); // changeName -> { name, tasks: [...] }
+
+const TASK_LINE = /^- \[([ xX])\]\s+(\S+)\s+(.*)$/;
+const HEADING_LINE = /^##\s+(.*)$/;
+
+function parseTasksMd(content) {
+  const tasks = [];
+  let group = null;
+  for (const line of content.split("\n")) {
+    const h = line.match(HEADING_LINE);
+    if (h) {
+      group = h[1].trim();
+      continue;
+    }
+    const m = line.match(TASK_LINE);
+    if (!m) continue;
+    const [, mark, id, rest] = m;
+    const segments = rest.split("|").map((s) => s.trim());
+    const description = segments[0];
+    const meta = {};
+    for (const seg of segments.slice(1)) {
+      const idx = seg.indexOf(":");
+      if (idx === -1) continue;
+      meta[seg.slice(0, idx).trim()] = seg.slice(idx + 1).trim();
+    }
+    const depends = (meta.depends || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s && s.toLowerCase() !== "none");
+    tasks.push({
+      id,
+      group,
+      description,
+      checked: mark.toLowerCase() === "x",
+      depends,
+      difficulty: meta.difficulty || null,
+      verify: meta.verify || null,
+    });
+  }
+  return tasks;
+}
+
+async function loadChangeTasks(changeDir) {
+  const name = path.basename(changeDir);
+  try {
+    const content = await readFile(path.join(changeDir, "tasks.md"), "utf8");
+    const tasks = parseTasksMd(content);
+    openspecChanges.set(name, { name, tasks });
+  } catch {
+    // tasks.md doesn't exist yet (change proposed but not through the
+    // tasks phase) — drop it from the graph rather than show stale data.
+    openspecChanges.delete(name);
+  }
+  broadcastGraph();
+}
+
+function watchOpenSpecChanges() {
+  // chokidar 5+ dropped glob-string support — watch the directory and
+  // filter for tasks.md ourselves instead (verified live: a glob pattern
+  // silently matched nothing, watching the dir directly works).
+  const changesDir = path.join(OPENSPEC_ROOT, "changes");
+  const watcher = chokidar.watch(changesDir, { ignoreInitial: false });
+  const isTasksFile = (file) => path.basename(file) === "tasks.md";
+  watcher.on("add", (file) => { if (isTasksFile(file)) loadChangeTasks(path.dirname(file)); });
+  watcher.on("change", (file) => { if (isTasksFile(file)) loadChangeTasks(path.dirname(file)); });
+  watcher.on("unlink", (file) => {
+    if (!isTasksFile(file)) return;
+    openspecChanges.delete(path.basename(path.dirname(file)));
+    broadcastGraph();
+  });
+  watcher.on("error", (err) => console.error("OpenSpec watcher error:", err.message));
+  console.log(`Watching OpenSpec changes: ${changesDir}`);
 }
 
 // ---- websocket fan-out -------------------------------------------------
@@ -240,6 +329,7 @@ async function watchEvents() {
 }
 
 await loadExistingSessions();
+watchOpenSpecChanges();
 
 watchEvents().catch((err) => {
   console.error("Lost connection to OpenCode event stream:", err.message);
