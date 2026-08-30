@@ -221,6 +221,45 @@ cette idée, il faut soit une clé API cloud (Anthropic/OpenAI — fiabilité
 suffisante quasi garantie), soit un modèle local nettement plus gros que ce
 que ce GPU (RTX 3080, 10 Go VRAM) peut faire tourner.
 
+**Suite du 2026-08-30 : décision prise, OpenSpec plutôt que le mode `plan`
+natif** — préférence explicite : OpenSpec force des points de validation
+explicites (proposal → design → tasks, chacun potentiellement relu par un
+humain) là où le mode `plan` laisse le modèle juger seul quand présenter un
+plan. Testé en conditions réelles :
+
+```bash
+npm install -g @fission-ai/openspec@latest
+openspec init --tools opencode .
+```
+
+Ça installe `openspec/config.yaml` **et** des skills/commandes OpenCode
+natifs dans `.opencode/` : `opsx-propose`, `opsx-explore`, `opsx-apply`,
+`opsx-archive`, `opsx-sync`, `opsx-update` (+ leurs skills correspondants).
+`opsx-explore` en particulier est *exactement* l'idée de "phase explore où
+le LLM pose des questions de clarification" — un skill déjà mûr : ton
+curieux non-scripté, diagrammes ASCII, refus explicite d'implémenter,
+confirmation obligatoire avant toute écriture.
+
+**Testé live (`opencode run --command opsx-explore "..."`) avec
+`qwen3:8b`** — et ça marche nettement mieux que le mode `plan` natif ou la
+délégation parallèle : deux essais, deux réponses cohérentes avec l'esprit
+du skill (questions de clarification ouvertes, ou proposition d'exécuter
+`openspec list --json` en demandant confirmation d'abord). Zéro
+hallucination, zéro erreur de schéma. Hypothèse qui explique la différence :
+`opsx-explore` est surtout conversationnel (texte + a lu quelques fichiers +
+au plus quelques appels bash simples), pas du function-calling structuré
+multi-appels comme le tool `task` — la panne qu'on avait identifiée était
+spécifique à *l'orchestration*, pas à la génération de texte/markdown.
+
+Piège opérationnel trouvé au passage : **`opencode serve` doit être
+redémarré après `openspec init`** pour découvrir les nouvelles commandes
+`.opencode/commands/*.md` — sinon `opencode run --attach ... --command
+opsx-explore` échoue avec une erreur serveur générique (`UnknownError`).
+
+À explorer ensuite (pas encore fait) : la suite du workflow —
+`opsx-propose` (génère proposal.md/tasks.md), voir si `openspec status
+--json` donne un vrai flux de progression exploitable par le visualiseur.
+
 ## Idées si tu veux aller plus loin
 
 - Passer par un **plugin OpenCode** (`.opencode/plugin/*.ts`) plutôt que par
