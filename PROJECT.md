@@ -260,6 +260,77 @@ opsx-explore` échoue avec une erreur serveur générique (`UnknownError`).
 `opsx-propose` (génère proposal.md/tasks.md), voir si `openspec status
 --json` donne un vrai flux de progression exploitable par le visualiseur.
 
+## Vision cible (2026-08-30) — scénario idéal décrit, pas encore construit
+
+Terminal + page web ouverts en parallèle. Le terminal pose une première
+question ("qu'est-ce que tu veux faire ?"), puis enchaîne sur des questions
+de clarification (référence, style graphique, techno HTML vs C++,
+orientation...), peut générer des **mockups PNG** ; à chaque acceptation la
+page web se met à jour avec les mockups/idées validés. Une fois cette phase
+bouclée, nouvelles questions plus techniques/archi, puis génération d'une
+**liste de tâches avec liens de dépendance, ordre, difficulté, méthode de
+test** — visible dans le graphe, cliquable pour le détail. Sur "implémente",
+les tâches passent au **vert quand leurs tests passent, rouge quand ils
+échouent**.
+
+Mapping contre ce qui existe (voir sections ci-dessus) :
+
+| Phase | Couverte par |
+|---|---|
+| Question initiale + clarification | ✅ `opsx-explore`, testé, fonctionne |
+| Mockups PNG + acceptation visuelle | ❌ rien — ni OpenSpec ni OpenCode ne génèrent d'images ; nécessite un modèle de génération d'image (non configuré ici) + un flow accept/reject à construire côté web |
+| Questions techniques/archi | ✅ `opsx-propose` probablement (proposal.md/design.md) — pas encore testé en direct |
+| Génération de la liste de tâches | ✅ `tasks.md` d'OpenSpec |
+| Dépendances entre tâches, difficulté, méthode de test | ❌ le format `tasks.md` standard n'a que des cases à cocher numérotées hiérarchiquement (1.1, 1.2...) — aucune notion de "bloque"/"dépend de", pas de champ difficulté ni méthode de test. Nécessiterait une convention custom (ex: métadonnées par tâche) + un parseur adapté |
+| Clic sur une tâche → détail | ✅ panneau de détail existant, adaptable |
+| Statut vert/rouge lié aux vrais tests (pas juste coché/pas coché) | ❌ rien de natif — nécessiterait de définir comment une tâche rapporte pass/fail de ses tests (fichier, exit code, event custom à inventer) |
+
+Décision du 2026-08-30 : documenter la vision, ne rien construire pour
+l'instant (session déjà très longue). Trois chantiers distincts identifiés
+pour une prochaine fois, par ordre de proximité avec l'existant :
+1. Dépendances/difficulté/tests dans `tasks.md` — extension de convention +
+   parseur, pas besoin de nouvel outil externe
+2. Statut vert/rouge lié aux tests réels — nécessite de définir une
+   convention de reporting pass/fail
+3. Mockups PNG + flow d'acceptation — le plus gros morceau, nécessite un
+   modèle de génération d'image (absent de ce setup) et une UI dédiée
+
+### Comment on implémenterait le chantier 1 concrètement : ni fork ni from-scratch
+
+Question posée et vérifiée en direct : `openspec` a un mécanisme officiel de
+customisation **project-local**, distinct de forker le code source. Testé :
+
+```bash
+openspec schemas          # liste les schemas dispo (juste "spec-driven" par défaut)
+openspec schema fork spec-driven task-graph
+```
+
+Ça copie `schemas/spec-driven` (dans le package npm installé) vers
+`openspec/schemas/task-graph/` **dans le projet** — éditable librement, sans
+toucher au package. Contenu vérifié :
+
+- `schema.yaml` définit tout le workflow : liste des artefacts
+  (proposal/specs/design/tasks), et pour chacun un champ `instruction` qui
+  est **littéralement le texte de prompt donné à l'IA** pour le générer.
+  L'instruction de `tasks` demande déjà "Order tasks by dependency" et
+  "state how to verify completion" — donc dépendance/méthode de test sont
+  déjà évoquées, mais en texte libre dans la description de la tâche, pas en
+  métadonnée structurée qu'un parseur peut extraire de façon fiable.
+- `templates/tasks.md` est trivial : juste `## N. <!-- ... -->` /
+  `- [ ] N.M <!-- ... -->`, facile à étendre avec un format explicite, ex.
+  `- [ ] 1.1 Description | depends: 1.0 | difficulty: medium | test: npm
+  test foo.test.js`.
+
+Plan (pas fait, juste vérifié faisable) : éditer l'`instruction` de `tasks`
+dans `schema.yaml` pour imposer ce format structuré, éditer le template en
+exemple, pointer `openspec/config.yaml` vers `schema: task-graph`, puis
+écrire notre propre parseur côté visualiseur (watcher de fichiers) qui en
+tire les vraies arêtes de dépendance/difficulté/test — **sans modifier le
+code d'OpenSpec** : `openspec status`/`apply` ne regardent que le `- [ ]` en
+début de ligne, tout ce qu'on ajoute après continue de fonctionner avec eux.
+⚠️ Les commandes `schema *` sont marquées "experimental" par OpenSpec
+lui-même (avertissement affiché à chaque appel) — le format peut changer.
+
 ## Idées si tu veux aller plus loin
 
 - Passer par un **plugin OpenCode** (`.opencode/plugin/*.ts`) plutôt que par
