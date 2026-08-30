@@ -278,7 +278,7 @@ Mapping contre ce qui existe (voir sections ci-dessus) :
 | Phase | Couverte par |
 |---|---|
 | Question initiale + clarification | ✅ `opsx-explore`, testé, fonctionne |
-| Mockups PNG + acceptation visuelle | ❌ rien — ni OpenSpec ni OpenCode ne génèrent d'images ; nécessite un modèle de génération d'image (non configuré ici) + un flow accept/reject à construire côté web |
+| Mockups PNG + acceptation visuelle | ⚠️ génération testée en vrai le 2026-08-30 (voir plus bas — **ça marche**) ; le flow accept/reject côté web reste à construire |
 | Questions techniques/archi | ✅ `opsx-propose` probablement (proposal.md/design.md) — pas encore testé en direct |
 | Génération de la liste de tâches | ✅ `tasks.md` d'OpenSpec |
 | Dépendances entre tâches, difficulté, méthode de test | ❌ le format `tasks.md` standard n'a que des cases à cocher numérotées hiérarchiquement (1.1, 1.2...) — aucune notion de "bloque"/"dépend de", pas de champ difficulté ni méthode de test. Nécessiterait une convention custom (ex: métadonnées par tâche) + un parseur adapté |
@@ -294,6 +294,62 @@ pour une prochaine fois, par ordre de proximité avec l'existant :
    convention de reporting pass/fail
 3. Mockups PNG + flow d'acceptation — le plus gros morceau, nécessite un
    modèle de génération d'image (absent de ce setup) et une UI dédiée
+
+### Chantier 3 (mockups) — génération d'image testée en vrai, ça marche
+
+**Ollama ne sert pas les modèles de génération d'image** (diffusion), quel
+que soit le modèle — c'est un stack complètement différent (ComfyUI ou
+`diffusers` en Python). Qwen2.5-VL, qu'on a d'abord considéré, est un modèle
+de *compréhension* d'image (image → texte), pas de génération — mauvaise
+piste initiale, corrigée après recherche.
+
+**Modèle retenu : Z-Image-Turbo** (`Tongyi-MAI/Z-Image-Turbo`, 6B, Alibaba,
+nov. 2025) — choisi plutôt que Qwen-Image (20B, trop lourd) ou FLUX (need
+quantization) parce qu'il tourne sans ComfyUI, juste `diffusers` :
+
+```bash
+python3 -m venv .venv-zimage && source .venv-zimage/bin/activate
+pip install torch --index-url https://download.pytorch.org/whl/cu124
+pip install "diffusers @ git+https://github.com/huggingface/diffusers" \
+  transformers accelerate sentencepiece protobuf pillow numpy
+```
+
+```python
+import torch
+from diffusers import ZImagePipeline
+
+pipe = ZImagePipeline.from_pretrained(
+    "Tongyi-MAI/Z-Image-Turbo", torch_dtype=torch.bfloat16, low_cpu_mem_usage=False,
+)
+pipe.enable_model_cpu_offload()  # marge de sécurité pour 10 Go de VRAM
+
+image = pipe(
+    prompt="...", height=768, width=768, num_inference_steps=9,
+    guidance_scale=0.0, generator=torch.Generator("cuda").manual_seed(42),
+).images[0]
+image.save("out.png")
+```
+
+**Testé en conditions réelles le 2026-08-30** sur ce RTX 3080 (10 Go VRAM) :
+génération réussie, ~9 étapes, résultat cohérent (mockup pixel-art d'un
+vaisseau de shooter, sur un prompt texte simple). Poids : ~17 Go téléchargés
+(HuggingFace Hub, resumable — une coupure réseau/téléchargement a réessayé
+sans tout retélécharger).
+
+⚠️ **Piège rencontré : crash disque.** Le téléchargement des poids a rempli
+le disque C: de Windows (1.9 To, tombé à 159 Mo libres), ce qui a fait
+planter WSL entièrement (`Wsl/Service/E_UNEXPECTED` — pas une erreur du
+script). Le disque virtuel WSL (`ext4.vhdx`, typiquement dans
+`%LOCALAPPDATA%\Packages\CanonicalGroupLimited.Ubuntu*\LocalState\`) grossit
+dynamiquement et ne se réduit jamais tout seul — à surveiller avant tout
+téléchargement volumineux (modèles Ollama + venv Python + cache HuggingFace
+ont fait monter ce disque virtuel à 51 Go rien que pour cette session).
+Après libération d'espace côté Windows, WSL redémarre normalement mais
+**tous les process qu'il hébergeait sont perdus** (opencode serve, ollama
+serve, le visualiseur) — à relancer manuellement.
+
+Reste à faire pour ce chantier : le flow d'acceptation côté web (afficher le
+mockup généré, bouton accepter/rejeter, mémoriser les idées validées).
 
 ### Comment on implémenterait le chantier 1 concrètement : ni fork ni from-scratch
 
@@ -339,8 +395,21 @@ lui-même (avertissement affiché à chaque appel) — le format peut changer.
   la distribution du plugin plutôt qu'avoir un process séparé à lancer
 - **Extension VSCode** : faisable, tourne sur Node comme aujourd'hui — un
   Webview hébergeant la même page, l'extension lance `opencode serve` en
-  sous-process. Permettrait aussi d'afficher le vrai terminal/output de
-  l'agent cliqué (dans un terminal intégré VSCode) plutôt qu'un panneau web
+  sous-process. **Mise à jour 2026-08-30** : OpenCode a déjà une extension
+  VSCode **officielle** (`sst-dev.opencode` sur le marketplace, v0.0.13,
+  >1M installs, éditeur SST — repo officiel `github.com/sst/opencode`) qui
+  couvre déjà panneau latéral + **revue de diff inline** + prompts liés à la
+  sélection + transcript en status bar. Il existe aussi une "OpenCode Beta"
+  (`sst-dev.opencode-v2`), probablement la prochaine version — pas encore
+  déterminé laquelle installer. Conséquence : pas besoin de reconstruire le
+  chat/diff dans une extension à nous — juste ajouter **notre graphe/vue
+  tâches en panneau compagnon** à côté de l'extension officielle. Comment
+  l'extension officielle parle en interne au CLI (son propre `opencode
+  serve` ? sur quel port ? découvrable ?) n'est pas documenté publiquement —
+  à vérifier dans son code source avant de committer à une architecture
+  précise. Sans même le savoir, notre panneau peut de toute façon lancer/
+  pointer vers son propre `opencode serve` comme on fait déjà, juste affiché
+  dans un Webview VSCode au lieu d'un onglet de navigateur.
 - Sprites pixel-art pour représenter les agents (idle/running/erreur comme
   poses différentes) plutôt que des cercles — discuté, pas commencé
 - Version TUI (dans le terminal, à côté d'OpenCode) — écarté pour l'instant,
