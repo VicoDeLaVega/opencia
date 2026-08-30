@@ -1,0 +1,13 @@
+{
+  "name": "opencode-agent-visualizer",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Real-time graph visualizer for OpenCode agent/subagent sessions.",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@opencode-ai/sdk": "^1.18.0",
+    "ws": "^8.18.0"
+  }
+}

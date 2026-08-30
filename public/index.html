@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>OpenCode Agent Visualizer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #faf7f2; color: #5c5a68; font-family: ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; }
+  #hud { position: fixed; top: 12px; left: 16px; font-size: 13px; opacity: 0.75; z-index: 2; display: flex; align-items: center; gap: 12px; }
+  #hud .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; }
+  #vizToggle {
+    font: inherit; font-size: 12px; color: #5c5a68; background: #f0ece2;
+    border: 1px solid #ddd7ca; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
+  #vizToggle:hover, #filesToggle:hover { background: #e6e2d8; }
+  #filesToggle {
+    font: inherit; font-size: 12px; color: #5c5a68; background: #f0ece2;
+    border: 1px solid #ddd7ca; border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
+  svg { width: 100vw; height: 100vh; display: block; }
+  .link { stroke: #ddd7ca; stroke-width: 1.5px; fill: none; }
+  .node rect.core { stroke: #faf7f2; stroke-width: 2px; cursor: pointer; }
+  .node text { fill: #5c5a68; font-size: 11px; pointer-events: none; }
+  .node .sub { fill: #9a95a3; font-size: 9px; }
+  @keyframes pulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50%      { transform: scale(1.06); opacity: 0.85; }
+  }
+  .node.running rect.core { animation: pulse 1.1s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+
+  .spark { fill: #f2c95c; opacity: 0; pointer-events: none; }
+  @keyframes sparkle {
+    0%   { transform: translate(0, 0) scale(0.3); opacity: 0; }
+    20%  { opacity: 1; }
+    100% { transform: translate(var(--sx), var(--sy)) scale(0); opacity: 0; }
+  }
+  .node.running .spark { animation: sparkle 1.4s ease-out infinite; }
+
+  #detail {
+    position: fixed; top: 0; right: 0; width: 360px; max-width: 90vw; height: 100%;
+    background: #fdfbf7; border-left: 1px solid #ddd7ca; box-shadow: -8px 0 24px rgba(90,80,60,0.08);
+    z-index: 3; overflow-y: auto; padding: 18px 20px; box-sizing: border-box;
+    transform: translateX(100%); transition: transform 0.18s ease-out;
+  }
+  #detail.open { transform: translateX(0); }
+  #detail h2 { font-size: 14px; margin: 0 0 4px; color: #4a4856; word-break: break-word; }
+  #detail .meta { font-size: 11px; color: #9a95a3; margin-bottom: 14px; }
+  #detail .meta div { margin-bottom: 2px; }
+  #detail .closeBtn {
+    position: absolute; top: 14px; right: 16px; border: none; background: none;
+    font-size: 16px; color: #9a95a3; cursor: pointer; line-height: 1;
+  }
+  #detail .closeBtn:hover { color: #5c5a68; }
+  #detail h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: #9a95a3; margin: 16px 0 6px; }
+  #detail .todoRow { font-size: 12px; padding: 4px 0; display: flex; gap: 6px; align-items: baseline; }
+  #detail .todoRow .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; margin-top: 4px; }
+  #detail .part { font-size: 11px; padding: 6px 8px; margin-bottom: 6px; background: #f4f0e8; border-radius: 6px; white-space: pre-wrap; word-break: break-word; }
+  #detail .part .tag { color: #9a95a3; font-size: 10px; display: block; margin-bottom: 2px; }
+  #detail .empty { font-size: 12px; color: #9a95a3; font-style: italic; }
+</style>
+</head>
+<body>
+<div id="hud">
+  <span><span class="dot" id="connDot" style="background:#cfcbc2"></span><span id="connText">connexion…</span></span>
+  <button id="vizToggle" title="Étoile : chaque todo relié à sa session. Chaîne : todos reliés dans l'ordre de la liste (approximation, pas une vraie dépendance).">vue : étoile</button>
+  <button id="filesToggle" title="Fichiers édités qu'on n'a pas pu attribuer à une session précise (l'event file.edited n'inclut pas toujours un sessionID).">📁 fichiers (0)</button>
+</div>
+<svg></svg>
+<div id="detail"><button class="closeBtn" id="detailClose">✕</button><div id="detailBody"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<script>
+const STATUS_COLOR = {
+  running: "#8fd9b6", // pastel green
+  idle: "#a8c5f0",    // pastel blue
+  error: "#f2a6a6",   // pastel coral
+};
+
+// Colors for todo satellite nodes (the primary agent's self-planned task list).
+const TODO_COLOR = {
+  pending: "#cfcbc2",     // pastel grey
+  in_progress: "#8fd9b6", // pastel green, matches STATUS_COLOR.running
+  completed: "#e6e2d8",   // faint grey
+  cancelled: "#e3b8b8",   // pastel dusty red
+};
+
+// "radial": every todo hangs directly off its session (what the data actually
+//   is — a flat checklist, no dependency info).
+// "chain": todos linked todo[0] → todo[1] → todo[2] in list order instead.
+//   This is a COSMETIC approximation, not real dependency data — OpenCode's
+//   todowrite tool doesn't expose any "depends on" relationship.
+let vizMode = "radial";
+
+// Turn each session's `todos` array into synthetic satellite nodes hanging
+// off that session, reusing the existing parentID → link logic.
+function expandTodos(nodesData) {
+  const extra = [];
+  for (const d of nodesData) {
+    let prevId = d.id;
+    (d.todos || []).forEach((todo, i) => {
+      // The real payload doesn't reliably include a stable `todo.id`, so
+      // fall back to its index in the list.
+      const id = `${d.id}:todo:${todo.id ?? i}`;
+      extra.push({
+        id,
+        parentID: vizMode === "chain" ? prevId : d.id,
+        title: todo.content,
+        status: todo.status, // pending | in_progress | completed | cancelled
+        isTodo: true,
+      });
+      if (vizMode === "chain") prevId = id;
+    });
+  }
+  return nodesData.concat(extra);
+}
+
+// Node "card" dimensions by kind — used for the rect itself, the collide
+// force radius, and the spark offsets.
+function nodeSize(d) {
+  if (d.isTodo) return { w: 96, h: 22 };
+  if (d.parentID) return { w: 118, h: 32 }; // subagent session
+  return { w: 138, h: 40 }; // primary session
+}
+
+const svg = d3.select("svg");
+const width = () => window.innerWidth;
+const height = () => window.innerHeight;
+
+const zoomBehavior = d3.zoom().scaleExtent([0.2, 4]).on("zoom", (ev) => g.attr("transform", ev.transform));
+const g = svg.append("g");
+svg.call(zoomBehavior);
+
+let simulation = d3.forceSimulation()
+  .force("link", d3.forceLink().id(d => d.id).distance(d => d.isTodo ? 60 : 110).strength(0.7))
+  .force("charge", d3.forceManyBody().strength(d => d.isTodo ? -50 : -220))
+  .force("x", d3.forceX(() => width() / 2).strength(0.03))
+  .force("y", d3.forceY(() => height() / 2).strength(0.03))
+  .force("collide", d3.forceCollide(d => Math.hypot(nodeSize(d).w, nodeSize(d).h) / 2 + 6));
+
+// Auto-frame the view on every node/graph in the simulation so nothing ends
+// up scattered off-screen — recomputed once the layout has settled (not on
+// every tick, which would fight the user's own zoom/pan while it's moving).
+function fitView() {
+  const all = simulation.nodes();
+  const xs = all.map(d => d.x).filter(Number.isFinite);
+  const ys = all.map(d => d.y).filter(Number.isFinite);
+  if (xs.length < 2) return; // nothing meaningful to frame yet
+  const pad = 80;
+  const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
+  const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
+  const scale = Math.min(2.5, Math.max(0.25, Math.min(width() / (maxX - minX), height() / (maxY - minY))));
+  const tx = width() / 2 - scale * (minX + maxX) / 2;
+  const ty = height() / 2 - scale * (minY + maxY) / 2;
+  svg.transition().duration(500).call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+}
+simulation.on("end", fitView);
+
+// Smooth arc between two node centers — the "cable" look, works for links
+// in any direction (our layout isn't strictly left-to-right).
+function linkPath(d) {
+  const sx = d.source.x, sy = d.source.y, tx = d.target.x, ty = d.target.y;
+  const dr = Math.hypot(tx - sx, ty - sy) * 1.3;
+  return `M${sx},${sy}A${dr},${dr} 0 0,1 ${tx},${ty}`;
+}
+
+let linkSel = g.append("g").selectAll("path");
+let nodeSel = g.append("g").selectAll("g");
+
+function render(rawNodesData) {
+  const nodesData = expandTodos(rawNodesData);
+  const nodeMap = new Map(nodesData.map(d => [d.id, d]));
+  const links = nodesData
+    .filter(d => d.parentID && nodeMap.has(d.parentID))
+    .map(d => ({ source: d.parentID, target: d.id, isTodo: d.isTodo }));
+
+  // preserve position of existing nodes across updates
+  const prevPositions = new Map(simulation.nodes().map(d => [d.id, d]));
+  const mergedNodes = nodesData.map(d => ({ ...prevPositions.get(d.id), ...d }));
+
+  simulation.nodes(mergedNodes);
+  simulation.force("link").links(links);
+  simulation.alpha(0.5).restart();
+
+  linkSel = linkSel.data(links, d => `${d.source.id ?? d.source}-${d.target.id ?? d.target}`);
+  linkSel.exit().remove();
+  linkSel = linkSel.enter().append("path").attr("class", "link").merge(linkSel);
+
+  nodeSel = nodeSel.data(mergedNodes, d => d.id);
+  nodeSel.exit().remove();
+
+  const enter = nodeSel.enter().append("g").attr("class", "node")
+    .on("click", (ev, d) => { ev.stopPropagation(); openDetail(d.id); })
+    .call(d3.drag()
+      .on("start", (ev, d) => { if (!ev.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (ev, d) => { d.fx = ev.x; d.fy = ev.y; })
+      .on("end", (ev, d) => { if (!ev.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  enter.append("rect").attr("class", "core").attr("rx", 8).attr("ry", 8);
+
+  // Sparks: 4 tiny dots that fly outward from the card's corners + fade when
+  // the node is "running". Hidden unless the parent has .running — see CSS.
+  enter.each(function (d) {
+    const node = d3.select(this);
+    const { w, h } = nodeSize(d);
+    const corners = [[w / 2, -h / 2], [-w / 2, -h / 2], [w / 2, h / 2], [-w / 2, h / 2]];
+    corners.forEach(([sx, sy], i) => {
+      node.append("circle")
+        .attr("class", "spark")
+        .attr("r", 2)
+        .style("--sx", `${sx * 1.4}px`)
+        .style("--sy", `${sy * 1.4}px`)
+        .style("animation-delay", `${i * 0.3}s`);
+    });
+  });
+
+  enter.append("text").attr("class", "label").attr("text-anchor", "middle").attr("dy", 4);
+  enter.append("text").attr("class", "sub").attr("text-anchor", "middle").attr("dy", 34);
+
+  nodeSel = enter.merge(nodeSel);
+
+  nodeSel.classed("running", d => d.status === "running" || d.status === "in_progress");
+  nodeSel.classed("todo", d => d.isTodo);
+
+  nodeSel.select("rect.core")
+    .attr("fill", d => d.isTodo ? (TODO_COLOR[d.status] || "#5b6472") : (STATUS_COLOR[d.status] || "#5b8cff"))
+    .attr("width", d => nodeSize(d).w)
+    .attr("height", d => nodeSize(d).h)
+    .attr("x", d => -nodeSize(d).w / 2)
+    .attr("y", d => -nodeSize(d).h / 2)
+    .attr("rx", d => d.isTodo ? 6 : 8);
+
+  nodeSel.select("text.label")
+    .attr("dy", d => d.isTodo ? 4 : -2)
+    .text(d => d.isTodo ? "" : (d.title || d.id).slice(0, 16));
+  nodeSel.select("text.sub")
+    .text(d => d.isTodo ? d.title.slice(0, 20) : (d.lastEvent || ""))
+    .attr("dy", d => d.isTodo ? 4 : 14)
+    .style("text-decoration", d => d.isTodo && d.status === "cancelled" ? "line-through" : null)
+    .style("opacity", d => d.isTodo && d.status === "completed" ? 0.5 : 1);
+
+  simulation.on("tick", () => {
+    linkSel.attr("d", linkPath);
+    nodeSel.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+
+  // Keep the open detail panel live-updated as new events arrive for it.
+  if (selectedId && nodeMap.has(selectedId)) renderDetail(nodeMap.get(selectedId));
+}
+
+// ---- detail panel (click a node to inspect it) ---------------------------
+let selectedId = null;
+const detailEl = document.getElementById("detail");
+const detailBodyEl = document.getElementById("detailBody");
+
+function openDetail(id) {
+  selectedId = id;
+  detailEl.classList.add("open");
+  const nodeMap = new Map(expandTodos(lastRawNodes).map(d => [d.id, d]));
+  if (nodeMap.has(id)) renderDetail(nodeMap.get(id));
+}
+
+function closeDetail() {
+  selectedId = null;
+  detailEl.classList.remove("open");
+}
+
+document.getElementById("detailClose").addEventListener("click", closeDetail);
+svg.on("click", closeDetail); // click empty canvas to close
+
+const STATUS_LABEL = {
+  pending: "en attente", in_progress: "en cours", completed: "terminé", cancelled: "annulé",
+};
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+}
+
+function renderDetail(d) {
+  if (d.isTodo) {
+    detailBodyEl.innerHTML = `
+      <h2>${esc(d.title)}</h2>
+      <div class="meta"><div>Statut : ${STATUS_LABEL[d.status] || d.status}</div></div>
+      <div class="empty">Todo issue de la todo-list native de l'agent (todowrite) — pas de détail supplémentaire disponible pour un item isolé.</div>`;
+    return;
+  }
+
+  const todosHtml = (d.todos || []).map(t => `
+    <div class="todoRow">
+      <span class="dot" style="background:${TODO_COLOR[t.status] || '#cfcbc2'}"></span>
+      <span style="${t.status === 'cancelled' ? 'text-decoration:line-through;' : ''}${t.status === 'completed' ? 'opacity:0.55;' : ''}">${esc(t.content)}</span>
+    </div>`).join("") || `<div class="empty">Aucune todo-list pour cette session.</div>`;
+
+  const parts = Object.values(d.parts || {});
+  const partsHtml = parts.length ? parts.map(p => {
+    if (p.type === "tool") {
+      const input = p.state?.input ? JSON.stringify(p.state.input) : "";
+      const output = p.state?.output ? String(p.state.output).slice(0, 300) : "";
+      return `<div class="part"><span class="tag">🔧 ${esc(p.tool)} · ${esc(p.state?.status || "")}</span>${esc(input)}${output ? "\n→ " + esc(output) : ""}</div>`;
+    }
+    return `<div class="part"><span class="tag">💬 texte</span>${esc((p.text || "").slice(0, 400))}</div>`;
+  }).join("") : `<div class="empty">Pas encore d'activité capturée.</div>`;
+
+  detailBodyEl.innerHTML = `
+    <h2>${esc(d.title || d.id)}</h2>
+    <div class="meta">
+      <div>id : ${esc(d.id)}</div>
+      <div>agent : ${esc(d.agent || "?")}</div>
+      <div>statut : ${esc(d.status)}</div>
+      ${d.model ? `<div>modèle : ${esc(d.model)}</div>` : ""}
+      ${d.tokens ? `<div>tokens : ${esc(d.tokens.input ?? 0)} in / ${esc(d.tokens.output ?? 0)} out</div>` : ""}
+      ${d.directory ? `<div>dossier : ${esc(d.directory)}</div>` : ""}
+      ${d.parentID ? `<div>parent : ${esc(d.parentID)}</div>` : ""}
+    </div>
+    <h3>Todo-list</h3>
+    ${todosHtml}
+    <h3>Fichiers touchés (${(d.files || []).length})</h3>
+    ${(d.files || []).map(f => `<div class="part">${esc(f)}</div>`).join("") || `<div class="empty">Aucun fichier attribué à cette session.</div>`}
+    <h3>Activité (${parts.length})</h3>
+    ${partsHtml}`;
+}
+
+let lastFilesEdited = [];
+
+function renderGlobalFiles() {
+  selectedId = "__global_files__";
+  detailEl.classList.add("open");
+  detailBodyEl.innerHTML = `
+    <h2>Fichiers non attribués</h2>
+    <div class="meta"><div>L'event file.edited n'inclut pas toujours un sessionID — ceux-ci n'ont pas pu être rattachés à une session précise.</div></div>
+    <h3>Fichiers (${lastFilesEdited.length})</h3>
+    ${lastFilesEdited.map(f => `<div class="part">${esc(f)}</div>`).join("") || `<div class="empty">Aucun pour l'instant.</div>`}`;
+}
+
+document.getElementById("filesToggle").addEventListener("click", (ev) => {
+  ev.stopPropagation();
+  renderGlobalFiles();
+});
+
+let lastRawNodes = [];
+
+document.getElementById("vizToggle").addEventListener("click", () => {
+  vizMode = vizMode === "radial" ? "chain" : "radial";
+  document.getElementById("vizToggle").textContent = vizMode === "radial" ? "vue : étoile" : "vue : chaîne";
+  render(lastRawNodes);
+});
+
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}`);
+  ws.onopen = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 1500); };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === "graph") {
+      lastRawNodes = msg.data.nodes;
+      lastFilesEdited = msg.data.filesEdited || [];
+      document.getElementById("filesToggle").textContent = `📁 fichiers (${lastFilesEdited.length})`;
+      render(lastRawNodes);
+      if (selectedId === "__global_files__") renderGlobalFiles();
+    }
+  };
+}
+
+function setConn(ok) {
+  document.getElementById("connDot").style.background = ok ? "#8fd9b6" : "#f2a6a6";
+  document.getElementById("connText").textContent = ok ? "connecté" : "déconnecté — retry…";
+}
+
+window.addEventListener("resize", () => simulation.force("center", d3.forceCenter(width() / 2, height() / 2)));
+connect();
+</script>
+</body>
+</html>
