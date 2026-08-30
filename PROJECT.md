@@ -229,6 +229,63 @@ cette idée, il faut soit une clé API cloud (Anthropic/OpenAI — fiabilité
 suffisante quasi garantie), soit un modèle local nettement plus gros que ce
 que ce GPU (RTX 3080, 10 Go VRAM) peut faire tourner.
 
+### 🎯 Déblocage majeur (2026-08-30) : les modèles cloud gratuits d'OpenCode
+
+`opencode models` liste, en plus des modèles Ollama configurés, des modèles
+**hébergés gratuitement par OpenCode lui-même** (préfixe `opencode/`, aucune
+clé API à configurer) :
+
+```
+opencode/big-pickle
+opencode/ling-3.0-flash-fin-free
+opencode/mimo-v2.5-free
+opencode/muse-spark-1.2-contributor-free
+opencode/nemotron-3-ultra-free
+opencode/nemotron-3.5-lightning-free
+```
+
+⚠️ Ce sont des requêtes qui partent vers les serveurs d'OpenCode — pas privé
+ni local comme Ollama, mais gratuit, sans clé à créer, et **nettement plus
+fiable**.
+
+**Testé en vrai le 2026-08-30** : rejoué le test `opsx-propose` qui avait
+échoué avec `qwen3:8b` (panne #7, fabrication narrative), cette fois avec
+`opencode/nemotron-3-ultra-free` :
+
+```bash
+opencode run -m 'opencode/nemotron-3-ultra-free' --attach http://localhost:4096 \
+  --auto --command opsx-propose 'ajouter un mode sombre au visualiseur (fichier public/index.html)'
+```
+
+Résultat : **succès complet**. Les 4 fichiers (`proposal.md`, `specs/dark-
+mode/spec.md`, `design.md`, `tasks.md`) ont été réellement écrits, avec une
+todo-list de progression visible en direct dans la sortie CLI, et un
+contenu de qualité nettement supérieure à tout ce que les modèles locaux
+ont produit cette session : références précises et exactes à notre vrai
+code (`STATUS_COLOR`/`TODO_COLOR`, `#vizToggle`, fonction `render()`,
+couleurs hex exactes du thème pastel), chaque tâche de `tasks.md` respecte
+la consigne "verify completion" du schema, `design.md` identifie même un
+vrai risque technique subtil (les attributs SVG posés via `.attr()` par D3
+ne transitionnent pas nativement en CSS).
+
+Le modèle a aussi montré une capacité d'adaptation solide : `openspec list
+--json` a échoué avec une vraie erreur d'environnement (`SyntaxError:
+Unexpected token 'with'` — le binaire `openspec` a un shebang `#!/usr/bin/env
+node`, et le node résolu par le shell non-interactif de l'agent est en
+v18.15.0 qui ne supporte pas `import ... with { type: "json" }`, alors qu'un
+shell de login normal résout v24.20.0 — écart de PATH entre les deux
+contextes, pas encore corrigé) ; au lieu de s'arrêter là, le modèle a
+contourné en créant les dossiers/fichiers directement avec les outils
+`bash`/`write`.
+
+**Conséquence pratique** : pour tout ce qui demande de l'orchestration
+multi-étapes fiable (`opsx-propose`, et probablement plus tard le task-graph
+et l'apply), préférer un modèle `opencode/*-free` à un modèle Ollama local —
+gratuit, pas de setup de clé, et la fiabilité manquante qui bloquait
+plusieurs chantiers cette session. Reste à tester : `opsx-apply`
+(implémentation réelle), et si ces modèles gratuits ont des limites de
+débit/usage à surveiller.
+
 **Suite du 2026-08-30 : décision prise, OpenSpec plutôt que le mode `plan`
 natif** — préférence explicite : OpenSpec force des points de validation
 explicites (proposal → design → tasks, chacun potentiellement relu par un
