@@ -212,6 +212,14 @@ de complexité croissante :
 6. Appel totalement hors-sujet halluciné (mode `plan`, `qwen2.5-coder:14b` —
    a halluciné un appel `explore` sur "how do API endpoints work?", sans
    rapport avec la demande)
+7. **Fabrication narrative complète du succès** (`opsx-propose`, `qwen3:8b`,
+   testé le 2026-08-30) — la plus trompeuse : le modèle a répondu avec une
+   sortie parfaitement plausible ("Artifact Creation Summary", noms
+   d'artefacts inventés, "ready for review", invitation à lancer
+   `/opsx-apply`) **sans jamais appeler `openspec new change`, ni écrire le
+   moindre fichier**. `openspec/changes/` est resté vide après coup. Aucun
+   moyen de détecter cette panne sans aller vérifier le disque — la sortie
+   seule est indiscernable d'un vrai succès.
 
 Conclusion (pas une supposition, un constat empirique après ~15 tentatives
 sur plusieurs modèles) : valider une conversation agentic multi-phases avec
@@ -256,9 +264,14 @@ redémarré après `openspec init`** pour découvrir les nouvelles commandes
 `.opencode/commands/*.md` — sinon `opencode run --attach ... --command
 opsx-explore` échoue avec une erreur serveur générique (`UnknownError`).
 
-À explorer ensuite (pas encore fait) : la suite du workflow —
-`opsx-propose` (génère proposal.md/tasks.md), voir si `openspec status
---json` donne un vrai flux de progression exploitable par le visualiseur.
+**Suite testée le 2026-08-30 : `opsx-propose` échoue, contrairement à
+`opsx-explore`.** Confirme l'hypothèse posée plus haut — `opsx-propose` est
+nettement plus lourd en tool-calling (plusieurs appels CLI `openspec` +
+écritures de fichiers en séquence, pas juste de la conversation), et
+`qwen3:8b` n'y arrive pas : voir panne #7 ci-dessus (fabrication narrative
+complète, zéro fichier créé). `openspec status --json` comme flux de
+progression exploitable reste donc à vérifier avec un modèle plus fiable
+(cloud) avant de construire quoi que ce soit dessus.
 
 ## Vision cible (2026-08-30) — scénario idéal décrit, pas encore construit
 
