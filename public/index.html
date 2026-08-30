@@ -87,9 +87,14 @@ const TODO_COLOR = {
 // Colors for OpenSpec change-graph nodes: a change root, and its tasks
 // (real dependency edges this time — see openspec/schemas/task-graph).
 const OPENSPEC_COLOR = {
-  change: "#c9b8f0",      // pastel lavender — distinct from OpenCode sessions
-  taskPending: "#cfcbc2", // pastel grey, matches TODO_COLOR.pending
-  taskDone: "#8fd9b6",    // pastel green
+  change: "#c9b8f0",       // pastel lavender — distinct from OpenCode sessions
+  taskNotStarted: "#cfcbc2", // pastel grey, matches TODO_COLOR.pending
+  taskInProgress: "#8fd9b6", // pastel green, matches STATUS_COLOR.running (also pulses)
+  taskInReview: "#f2c95c",   // pastel amber — implemented, not yet verified
+  taskDone: "#7ecb9e",       // slightly deeper green than in_progress — visually "settled"
+};
+const TASK_STATUS_LABEL = {
+  not_started: "à faire", in_progress: "en cours", in_review: "en revue", done: "fait",
 };
 const DIFFICULTY_LEVEL = { easy: 1, medium: 2, hard: 3 };
 
@@ -150,6 +155,8 @@ function expandOpenSpecTasks(changes) {
         checked: t.checked,
         difficulty: t.difficulty,
         verify: t.verify,
+        status: t.status,
+        files: t.files,
         group: t.group,
         changeName: change.name,
         taskNum: t.id,
@@ -278,7 +285,12 @@ function render(rawNodesData) {
   function fillFor(d) {
     if (d.isTodo) return TODO_COLOR[d.status] || "#5b6472";
     if (d.isOpenSpecChange) return OPENSPEC_COLOR.change;
-    if (d.isOpenSpecTask) return d.checked ? OPENSPEC_COLOR.taskDone : OPENSPEC_COLOR.taskPending;
+    if (d.isOpenSpecTask) {
+      if (d.status === "in_progress") return OPENSPEC_COLOR.taskInProgress;
+      if (d.status === "in_review") return OPENSPEC_COLOR.taskInReview;
+      if (d.status === "done" || d.checked) return OPENSPEC_COLOR.taskDone;
+      return OPENSPEC_COLOR.taskNotStarted;
+    }
     return STATUS_COLOR[d.status] || "#5b8cff";
   }
 
@@ -301,7 +313,7 @@ function render(rawNodesData) {
     .text(d => {
       if (d.isTodo) return d.title.slice(0, 20);
       if (d.isOpenSpecChange) return "openspec";
-      if (d.isOpenSpecTask) return `${d.difficulty || "?"} · ${d.checked ? "fait" : "à faire"}`;
+      if (d.isOpenSpecTask) return `${d.difficulty || "?"} · ${TASK_STATUS_LABEL[d.status] || d.status}`;
       return d.lastEvent || "";
     })
     .attr("dy", d => d.isTodo ? 4 : 14)
@@ -357,12 +369,22 @@ function renderDetail(d) {
   }
 
   if (d.isOpenSpecTask) {
+    const STATUS_ICON = { not_started: "⬜", in_progress: "🟢", in_review: "🟡", done: "✅" };
+    const IMAGE_EXT = /\.(png|jpe?g|gif|webp|svg)$/i;
+    const filesHtml = (d.files || []).length
+      ? d.files.map(f => {
+          const url = `/task-file?path=${encodeURIComponent(f)}`;
+          return IMAGE_EXT.test(f)
+            ? `<div class="part"><span class="tag">🖼️ ${esc(f)}</span><a href="${url}" target="_blank"><img src="${url}" alt="${esc(f)}" style="max-width:100%;border-radius:6px;margin-top:4px;" /></a></div>`
+            : `<div class="part"><a href="${url}" target="_blank">📄 ${esc(f)}</a></div>`;
+        }).join("")
+      : `<div class="empty">Aucun fichier enregistré pour cette tâche pour l'instant.</div>`;
     detailBodyEl.innerHTML = `
       <h2>${esc(d.title)}</h2>
       <div class="meta">
         <div>change : ${esc(d.changeName)}</div>
         <div>groupe : ${esc(d.group || "—")}</div>
-        <div>statut : ${d.checked ? "✅ fait" : "⬜ à faire"}</div>
+        <div>statut : ${STATUS_ICON[d.status] || "?"} ${esc(TASK_STATUS_LABEL[d.status] || d.status)}</div>
         <div>difficulté : ${esc(d.difficulty || "?")}</div>
       </div>
       <h3>Dépend de</h3>
@@ -370,7 +392,9 @@ function renderDetail(d) {
         ? d.dependsOn.map(dep => `<div class="part">${esc(dep.split(":").pop())}</div>`).join("")
         : `<div class="empty">Aucune dépendance — rattachée directement au change.</div>`}
       <h3>Vérification</h3>
-      <div class="part">${esc(d.verify || "non précisée")}</div>`;
+      <div class="part">${esc(d.verify || "non précisée")}</div>
+      <h3>Fichiers produits (${(d.files || []).length})</h3>
+      ${filesHtml}`;
     return;
   }
 

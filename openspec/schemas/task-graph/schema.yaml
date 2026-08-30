@@ -189,9 +189,9 @@ artifacts:
       in this order, separated by ` | `. Tasks not using `- [ ]` won't be
       tracked by either.
 
-      **Task line format (all four fields required, in this order):**
+      **Task line format (all six fields required, in this order):**
       ```
-      - [ ] X.Y Task description | depends: <refs> | difficulty: <level> | verify: <check>
+      - [ ] X.Y Task description | depends: <refs> | difficulty: <level> | verify: <check> | status: <state> | files: <paths>
       ```
       - `depends`: comma-separated task numbers this task needs finished first
         (e.g. `1.1,1.2`), or `none` if it has no prerequisite within this task
@@ -202,6 +202,11 @@ artifacts:
       - `verify`: how to confirm the task is actually done - a concrete test
         command, an explicit manual check, or an observable behavior. Not a
         restatement of the task description.
+      - `status`: always `not_started` at creation time - the apply phase is
+        responsible for advancing this as work happens (see apply.instruction
+        below). Never write anything else here yourself.
+      - `files`: always `none` at creation time - same reasoning, the apply
+        phase fills this in as files are actually produced.
 
       Guidelines:
       - Group related tasks under ## numbered headings
@@ -217,13 +222,13 @@ artifacts:
       ```
       ## 1. Setup
 
-      - [ ] 1.1 Create new module structure | depends: none | difficulty: easy | verify: expected files are present
-      - [ ] 1.2 Add dependencies to package.json | depends: 1.1 | difficulty: easy | verify: package installation succeeds
+      - [ ] 1.1 Create new module structure | depends: none | difficulty: easy | verify: expected files are present | status: not_started | files: none
+      - [ ] 1.2 Add dependencies to package.json | depends: 1.1 | difficulty: easy | verify: package installation succeeds | status: not_started | files: none
 
       ## 2. Core Implementation
 
-      - [ ] 2.1 Implement data export function | depends: 1.2 | difficulty: medium | verify: export test passes
-      - [ ] 2.2 Add CSV formatting utilities | depends: 2.1 | difficulty: easy | verify: unit tests cover quoting and delimiters
+      - [ ] 2.1 Implement data export function | depends: 1.2 | difficulty: medium | verify: export test passes | status: not_started | files: none
+      - [ ] 2.2 Add CSV formatting utilities | depends: 2.1 | difficulty: easy | verify: unit tests cover quoting and delimiters | status: not_started | files: none
       ```
 
       Reference specs for what needs to be built, design for how to build it.
@@ -235,5 +240,23 @@ apply:
   requires: [ tasks ]
   tracks: tasks.md
   instruction: |
-    Read context files, work through pending tasks, mark complete as you go.
-    Pause if you hit blockers or need clarification.
+    Read context files, then work through pending tasks (top to bottom,
+    respecting `depends`) one at a time. A companion visualizer renders each
+    task's `status` and `files` field live, so update tasks.md as you go -
+    not only at the very end:
+
+    1. Before starting a task, edit its line in place: `status: not_started`
+       → `status: in_progress`.
+    2. As you create or modify a file for that task, add its path to the
+       task's `files` field (comma-separated, relative to the project root,
+       e.g. `files: src/api.ts,src/api.test.ts`). Append to the existing list
+       rather than overwriting it if the task already has files recorded.
+    3. Once the implementation looks done but you have not yet run its
+       `verify` check, set `status: in_review`.
+    4. Run the `verify` check. If it passes, flip the checkbox to `[x]` and
+       set `status: done`. If it fails, keep working on the task - do not
+       mark it done or move to a dependent task.
+
+    Pause if you hit blockers or need clarification - leave the task at
+    whatever status is accurate (`in_progress` or `in_review`), do not mark
+    it `done` on a guess.

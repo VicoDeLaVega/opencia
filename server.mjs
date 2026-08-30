@@ -26,6 +26,11 @@ const VIS_PORT = Number(process.env.VIS_PORT || 8787);
 // separate opencode project being watched would need to point this at
 // itself instead.
 const OPENSPEC_ROOT = process.env.OPENSPEC_ROOT || path.join(__dirname, "openspec");
+// `files:` entries in tasks.md are relative to the project root (see
+// openspec/schemas/task-graph/schema.yaml's apply.instruction) - which is
+// openspec/'s parent, not this server's own directory (a separate project
+// being watched would set OPENSPEC_ROOT, and PROJECT_ROOT follows it).
+const PROJECT_ROOT = path.dirname(OPENSPEC_ROOT);
 
 // ---- graph state -----------------------------------------------------
 // nodes: sessionId -> { id, parentID, title, agent, status, lastEvent, updatedAt }
@@ -104,14 +109,23 @@ function parseTasksMd(content) {
       .split(",")
       .map((s) => s.trim())
       .filter((s) => s && s.toLowerCase() !== "none");
+    const files = (meta.files || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s && s.toLowerCase() !== "none");
+    const checked = mark.toLowerCase() === "x";
     tasks.push({
       id,
       group,
       description,
-      checked: mark.toLowerCase() === "x",
+      checked,
       depends,
       difficulty: meta.difficulty || null,
       verify: meta.verify || null,
+      // Older tasks.md files (written before this field existed) have no
+      // `status` — fall back to the checkbox so they still render sanely.
+      status: meta.status || (checked ? "done" : "not_started"),
+      files,
     });
   }
   return tasks;
@@ -159,8 +173,38 @@ function broadcastGraph() {
   }
 }
 
+// Preview a file a task claims to have produced (its `files:` field).
+// Those paths are project-root-relative and come from LLM-authored
+// tasks.md, so we resolve and then verify the result is still inside
+// PROJECT_ROOT before serving anything — a `files: ../../etc/passwd` entry
+// (buggy or malicious) must not escape the project directory.
+const IMAGE_TYPES = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".svg": "image/svg+xml" };
+const TEXT_TYPES = { ".md": "text/markdown", ".json": "application/json", ".js": "application/javascript", ".mjs": "application/javascript", ".css": "text/css", ".html": "text/html" };
+
+async function serveTaskFile(req, res) {
+  const url = new URL(req.url, "http://localhost");
+  const rel = url.searchParams.get("path") || "";
+  const resolved = path.resolve(PROJECT_ROOT, rel);
+  if (!resolved.startsWith(PROJECT_ROOT + path.sep)) {
+    res.writeHead(403);
+    res.end("path escapes project root");
+    return;
+  }
+  try {
+    const body = await readFile(resolved);
+    const ext = path.extname(resolved).toLowerCase();
+    const type = IMAGE_TYPES[ext] || TEXT_TYPES[ext] || "text/plain";
+    res.writeHead(200, { "Content-Type": type });
+    res.end(body);
+  } catch {
+    res.writeHead(404);
+    res.end("file not found");
+  }
+}
+
 // ---- static file + websocket http server --------------------------------
 const server = createServer(async (req, res) => {
+  if (req.url.startsWith("/task-file")) return serveTaskFile(req, res);
   try {
     const filePath =
       req.url === "/" || !req.url
