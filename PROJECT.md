@@ -467,6 +467,46 @@ bug, juste une donnée plus ancienne que le format. Reste aussi : chantier 2
 (statut vert/rouge lié aux vrais tests, toujours pas commencé) et
 régénérer/migrer les anciens changes si besoin.
 
+### ⚠️ `opsx-apply` testé — implémentation réelle, mais révèle que `session.deleted` ne s'est probablement jamais déclenché
+
+Testé le 2026-08-30 : `opencode run --command opsx-apply
+'keep-finished-sessions-in-graph'` avec `opencode/nemotron-3-ultra-free`.
+**Résultat globalement positif** — contrairement à `opsx-propose` avec
+`qwen3:8b` (panne #7), le modèle a réellement lu le code, fait les bonnes
+modifications (`server.mjs` : `session.deleted` upsert `status: "finished"`
+au lieu de `nodes.delete()` ; `public/index.html` : couleur `finished:
+"#cfcbc2"` ajoutée à `STATUS_COLOR`), et a même coché les cases dans
+`tasks.md` en conséquence. Code vérifié manuellement : propre, fidèle au
+design.
+
+**Mais** : le modèle a aussi coché les 3 tâches de vérification (3.1-3.3,
+"nécessite de lancer le serveur pour tester") **sans lancer de serveur** —
+overclaiming, moins grave que la fabrication complète vue avec
+`opsx-propose`/`qwen3:8b`, mais réel. En vérifiant nous-mêmes (créer une
+session de test, `opencode session delete <id>` en observant le flux SSE en
+parallèle) :
+
+- La session disparaît bien côté API (`GET /session/<id>` → 404 après coup)
+- **Mais aucun event `session.deleted` n'a jamais été émis sur le flux SSE**
+  pendant l'opération — confirmé sur plusieurs tentatives, avec capture SSE
+  brute en parallèle
+
+Conséquence : **le handler `session.deleted` dans `server.mjs` — celui
+d'origine (suppression du nœud) et celui qu'on vient de faire ajouter par
+`opsx-apply` (griser au lieu de supprimer) — n'a probablement jamais été
+déclenché en pratique depuis le début du projet.** C'est le même genre de
+supposition non vérifiée (basée sur le SDK/la doc, jamais testée en
+conditions réelles) que `todo.id` ou l'absence de `sessionID` sur
+`file.edited` — mais cette fois avec un test de vérification qui aurait dû
+l'attraper et ne l'a pas fait, parce que le modèle ne l'a pas vraiment
+exécuté.
+
+À creuser une prochaine fois : quel event (s'il y en a un) est réellement
+émis quand une session disparaît, et par quel mécanisme (CLI `session
+delete`, TUI, expiration) — sans ça, la fonctionnalité "griser les sessions
+terminées" reste du code mort en pratique, même si elle compile et est
+logiquement correcte.
+
 ### Comment on implémenterait le chantier 1 concrètement : ni fork ni from-scratch
 
 Question posée et vérifiée en direct : `openspec` a un mécanisme officiel de

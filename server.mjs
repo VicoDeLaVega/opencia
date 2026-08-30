@@ -293,9 +293,8 @@ async function watchEvents() {
       }
       case "session.deleted": {
         const id = event.properties?.sessionID ?? event.sessionID;
-        if (id) {
-          nodes.delete(id);
-          broadcastGraph();
+        if (id && nodes.has(id)) {
+          upsertNode(id, { status: "finished", lastEvent: "deleted" });
         }
         break;
       }
