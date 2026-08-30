@@ -571,6 +571,56 @@ lui-même (avertissement affiché à chaque appel) — le format peut changer.
 - Version TUI (dans le terminal, à côté d'OpenCode) — écarté pour l'instant,
   le choix a été fait de partir sur du web
 
+## 2026-08-30 (suite) — génération d'images locale + statut de tâche riche
+
+Deux chantiers de la "vision cible" avancés dans la même session :
+
+**Génération d'images locale (`image_generation/`, voir son propre
+README.md)** — phase 1 seulement (`prompt → planner LLM → JSON validé →
+ComfyUI → image`), pas le module de sprite/animation complet. ComfyUI
+installé séparément (`~/Dev/ComfyUI`, son propre venv avec torch+MPS —
+`image_generation/` lui-même n'a aucune dépendance torch, c'est un simple
+client HTTP). Modèle : **FLUX.2-klein-4B** (sorti par Black Forest Labs
+après la connaissance d'entraînement de Claude — trouvé en cherchant les
+téléchargements réels sur Hugging Face plutôt qu'en supposant un nom de
+modèle connu). Découverte technique clé : **le fp8/fp4 ne marche pas sur le
+backend MPS d'Apple** (`RuntimeError: Undefined type Float8_e4m3fn` — les
+kernels de déquantification fp8 de PyTorch sont CUDA-only) ; basculé sur
+bf16 pleine précision (~16GB en RAM, toujours rapide : ~7-9s/image à
+512×512 en 4 steps). Pour le pixel art : une LoRA dédiée
+(`adirik/pixel-art-lora-flux.2-klein-4B`) + un downscale mécanique vers la
+résolution native réelle (pas un filtre de pixellisation) — vérifié contre
+les prompts de test du cahier des charges (icône potion, chevalier 32×48,
+tuile d'herbe), avec vraie transparence alpha (flood-fill depuis les
+coins). `sprite`/`tileset` et `img2img`/`inpaint` lèvent explicitement
+`NotImplementedError` plutôt que de simuler un support qui n'existe pas.
+
+**Statut de tâche riche + aperçu de fichiers produits** — l'utilisateur a
+précisé que l'important n'est pas les mockups (accept/reject), mais : (1)
+un statut de tâche plus fin que coché/pas coché (`not_started` /
+`in_progress` / `in_review` / `done`), visible en couleur dans le graphe ;
+(2) cliquer une tâche → voir les fichiers qu'elle a produits → clic sur un
+fichier image → aperçu inline (ex. un sprite généré). Implémenté en
+étendant encore le format de ligne de `openspec/schemas/task-graph` (deux
+champs de plus : `status`, `files`), et en réécrivant `apply.instruction`
+pour que l'agent qui exécute les tâches mette à jour ces champs en marchant
+(pas seulement à la toute fin). `server.mjs` expose une route
+`GET /task-file?path=...` pour prévisualiser un fichier produit, avec
+vérification anti-traversal (testé en direct : `../../../etc/passwd` →
+403). **Vérifié visuellement avec Playwright** (pas juste en relisant le
+code) : capture d'écran du graphe montrant les bonnes couleurs de statut,
+et du panneau de détail affichant une vraie image de sprite générée inline
+après clic sur la tâche. Un piège trouvé au passage : plusieurs changes
+peuvent avoir chacun une tâche "1.1" — un sélecteur DOM basé sur ce seul
+numéro clique le mauvais nœud, il faut désambiguïser par un texte plus
+spécifique.
+
+À faire ensuite (pas commencé) : brancher `image_generation/` à ce flux de
+tâches (une tâche de type "génère un sprite" qui appelle
+`image_generation` automatiquement et remplit son propre champ `files`) ;
+statut vert/rouge lié à de vraies exécutions de tests (`verify:`) plutôt
+qu'à une mise à jour manuelle du champ `status`.
+
 ## Setup local utilisé pour les tests
 
 - OpenCode : `npm install -g opencode-ai@latest`
