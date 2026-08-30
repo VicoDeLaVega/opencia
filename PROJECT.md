@@ -615,11 +615,31 @@ peuvent avoir chacun une tâche "1.1" — un sélecteur DOM basé sur ce seul
 numéro clique le mauvais nœud, il faut désambiguïser par un texte plus
 spécifique.
 
-À faire ensuite (pas commencé) : brancher `image_generation/` à ce flux de
-tâches (une tâche de type "génère un sprite" qui appelle
-`image_generation` automatiquement et remplit son propre champ `files`) ;
-statut vert/rouge lié à de vraies exécutions de tests (`verify:`) plutôt
-qu'à une mise à jour manuelle du champ `status`.
+**Suite immédiate, faite dans la foulée** : champ `generate:` ajouté au
+format de tâche (7e champ) — pour une tâche dont le livrable est un asset
+généré, il contient la commande exacte
+`image_generation/venv/bin/python image_generation/cli.py "<prompt>"
+--mode pixel_art --task-file <ce fichier> --task-id <cette tâche>`.
+Décision volontaire de **ne pas** faire confiance à l'agent exécutant pour
+éditer `files`/`status` à la main après coup (PROJECT.md documente déjà
+plusieurs échecs réels de petits modèles locaux sur des éditions
+structurées précises) — `image_generation/cli.py` met à jour ces deux
+champs lui-même, mécaniquement (`image_generation/taskfile.py`, simple
+substitution regex, pas un nouvel appel LLM). Bug réel trouvé et corrigé en
+testant : `cli.py` supposait un lancement via `python -m
+image_generation.cli` (racine du repo sur `sys.path`), mais la commande
+`generate:` l'invoque par chemin relatif direct — ajouté un
+`sys.path.insert` explicite pour que ça marche peu importe la méthode
+d'invocation. Vérifié en direct de bout en bout (génération réelle → champs
+mis à jour dans tasks.md → graphe live → panneau de détail affichant la
+commande et l'image), capturé avec Playwright.
+
+À faire ensuite (pas commencé) : tester ce flux avec un vrai `opsx-apply`
+tournant sur un `tasks.md` contenant une tâche `generate:` (jusqu'ici testé
+en lançant la commande nous-mêmes, jamais laissé un agent la découvrir et
+la lancer de lui-même à partir de la ligne de tâche) ; statut vert/rouge
+lié à de vraies exécutions de tests (`verify:`) plutôt qu'à une mise à jour
+manuelle du champ `status` pour les tâches de code.
 
 ## Setup local utilisé pour les tests
 
