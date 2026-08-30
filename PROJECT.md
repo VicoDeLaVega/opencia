@@ -55,6 +55,16 @@ injecté dans OpenCode lui-même (option possible plus tard, voir "Idées").
 - **Panneau de détail au clic** sur un nœud : id, agent, modèle, tokens,
   todo-list, fichiers touchés, activité (texte + tool calls)
 - **VFX** : étincelles animées (CSS) sur les nœuds `running`/`in_progress`
+- **Nœuds en cartes rectangulaires** (coins arrondis, taille selon le type :
+  session primaire / subagent / todo) reliées par des **câbles bezier**
+  (arc SVG) plutôt que des cercles/lignes droites
+- **Auto-cadrage de la vue** (`fitView()`, déclenché quand la simulation
+  D3 se stabilise) — recentre/zoome automatiquement sur tous les nœuds,
+  pour ne pas en perdre quand le graphe s'étale
+- Préchargement limité à `MAX_PRELOAD_SESSIONS` (défaut : 1, la session la
+  plus récente seulement) — un projet accumule vite des dizaines de
+  sessions de test sans rapport entre elles, les montrer toutes au démarrage
+  ne fait que noyer le graphe de points isolés
 - Reconnexion auto du WebSocket côté front si le serveur redémarre
 
 ## Ce qui N'EST PAS fait / inconnues à lever en premier
@@ -140,6 +150,76 @@ TODO restants par ordre d'utilité probable :
 - [ ] Remplacer le rebroadcast "snapshot complet" par un diff (nodes
       ajoutés/modifiés/supprimés) si le graphe devient gros — pas nécessaire
       tant que c'est quelques dizaines de nœuds
+
+## Idée explorée : workflow agentic multi-phases (explore → clarification → archi → tâches)
+
+Idée du 2026-08-30 : un outil qui ferait, avant tout code, une vraie
+conversation en plusieurs phases — explore, clarification des idées avec
+l'utilisateur, discussion technique/architecture, puis génération d'une
+liste de tâches avec dépendances — et où le visualiseur montrerait la
+progression de cette liste (tests en parallèle de l'implémentation, code
+couleur par statut). Recherche faite avant de coder quoi que ce soit :
+
+**OpenSpec** ([Fission-AI/OpenSpec](https://github.com/Fission-AI/OpenSpec),
+MIT, Node/TypeScript, npm `@fission-ai/openspec`) : framework spec-driven
+existant qui fait une partie de ça. Format réel (vérifié via la doc, pas
+testé contre un vrai projet — on n'en avait pas sous la main) :
+```
+openspec/
+├── specs/                    # état actuel du système
+└── changes/<nom>/
+    ├── proposal.md / design.md / tasks.md
+    └── specs/
+```
+`tasks.md` = markdown pur, cases à cocher hiérarchiques (`- [ ] 1.1 ...`).
+**Point clé : pas d'API, pas d'events** — juste des fichiers édités à la
+main/par l'agent. Un fork est légalement et techniquement faisable (licence
+permissive, stack accessible), mais probablement inutile : tout ce qu'on
+voudrait faire (afficher la progression) est atteignable en observateur
+externe pur — un watcher de fichiers (`fs.watch` sur
+`openspec/changes/*/tasks.md`) + un parseur markdown, sans toucher au code
+d'OpenSpec, dans le même esprit que le reste de ce projet ("aucune
+modification du core"). Un fork ne se justifierait que pour faire pousser un
+event *au moment précis* où OpenSpec coche une tâche, plutôt que de le
+déduire d'un diff de fichier.
+
+**Mode `plan` natif d'OpenCode** : existe réellement, et est structurellement
+proche de ce qui est décrit. Vérifié en conditions réelles (`opencode run
+--agent plan`) : system prompt dédié explicite ("Plan Mode — pas de
+modification de fichiers"), accès aux outils `explore` (délégation
+subagent), todo-list, `webfetch` ; écriture restreinte à
+`.opencode/plans/*.md` (vu dans les permissions listées par
+`opencode agent list`, confirmé par le comportement live). C'est une
+fondation exploitable sans rien construire à partir de zéro ni forker quoi
+que ce soit — mais son comportement réel (quel format de sortie, comment il
+pose des questions de clarification, etc.) **n'a jamais pu être observé
+jusqu'au bout**, voir plus bas.
+
+**Blocage rencontré : fiabilité tool-calling des modèles locaux.** Sur ce
+setup (Ollama, GPU 10 Go, modèles 7B–14B), 6 pannes *différentes* et
+reproductibles ont été croisées au cours de cette session, sur des prompts
+de complexité croissante :
+1. Hallucination d'appels d'outils sur des prompts triviaux qui n'en ont pas
+   besoin (`qwen2.5-coder`)
+2. Non-appel silencieux — raisonnement correct, zéro tool call émis
+   (`qwen3:8b`, contexte par défaut 2048 trop court)
+3. Appel simulé en texte brut (`{"name": "write", ...}` comme du texte, pas
+   un vrai tool call structuré) au lieu d'un vrai appel
+4. Erreur de validation de schéma — champ obligatoire omis (`num_ctx: 8192`
+   a débloqué l'émission de l'appel, mais pas sa validité)
+5. Non-déterminisme — le même prompt, la même config, un essai qui marche
+   (partiellement) et le suivant qui régresse à zéro appel
+6. Appel totalement hors-sujet halluciné (mode `plan`, `qwen2.5-coder:14b` —
+   a halluciné un appel `explore` sur "how do API endpoints work?", sans
+   rapport avec la demande)
+
+Conclusion (pas une supposition, un constat empirique après ~15 tentatives
+sur plusieurs modèles) : valider une conversation agentic multi-phases avec
+clarification + planification + délégation nécessite une fiabilité de
+tool-calling que ces modèles locaux n'ont pas. Pour aller plus loin sur
+cette idée, il faut soit une clé API cloud (Anthropic/OpenAI — fiabilité
+suffisante quasi garantie), soit un modèle local nettement plus gros que ce
+que ce GPU (RTX 3080, 10 Go VRAM) peut faire tourner.
 
 ## Idées si tu veux aller plus loin
 
